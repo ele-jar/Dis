@@ -1,4 +1,3 @@
-// bot.js
 const Discord = require('discord.js');
 const express = require('express');
 const cors = require('cors');
