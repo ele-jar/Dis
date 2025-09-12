@@ -2,36 +2,37 @@ import discord
 from discord.ext import commands
 from discord import app_commands, ui
 
-class PanelNameModal(ui.Modal, title='Set Panel Name'):
-    panel_name = ui.TextInput(label='Panel Name', placeholder='e.g., General Support', required=True, max_length=100)
+# --- UI Components ---
 
-    def __init__(self, setup_view):
-        super().__init__()
-        self.setup_view = setup_view
+class PanelNameModal(ui.Modal, title='Set Panel Name'):
+    panel_name_input = ui.TextInput(label='Panel Name', placeholder='e.g., General Support', required=True, max_length=100)
 
     async def on_submit(self, interaction: discord.Interaction):
-        self.setup_view.panel_data['name'] = self.panel_name.value
+        # This modal only needs to pass the data back to the view that created it.
+        # It doesn't need to update any messages itself.
         await interaction.response.defer()
-        await self.setup_view.update_view(interaction)
+        self.view.panel_data['name'] = self.panel_name_input.value
+        await self.view.update_message()
 
 class SetupView(ui.View):
     def __init__(self, bot, author):
         super().__init__(timeout=300)
         self.bot = bot
         self.author = author
-        self.current_step = 1
         self.message = None
+        self.current_step = 1
         self.panel_data = {
             "name": "New Panel", "support_role": None, "category": None,
             "transcript_channel": None, "panel_channel": None, "claimable": False
         }
+        self.update_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.author.id:
             return True
         await interaction.response.send_message("You cannot interact with this setup panel.", ephemeral=True)
         return False
-    
+
     async def on_timeout(self):
         if self.message:
             for item in self.children:
@@ -39,7 +40,7 @@ class SetupView(ui.View):
             try:
                 await self.message.edit(content="This setup panel has expired.", view=self)
             except discord.NotFound:
-                pass
+                pass # Message was already deleted or dismissed
 
     def create_embed(self):
         descriptions = [
@@ -68,93 +69,124 @@ class SetupView(ui.View):
         self.clear_items()
         
         if self.current_step == 1:
-            self.add_item(ui.Button(label="Set Name", style=discord.ButtonStyle.secondary, custom_id="set_name"))
+            self.add_item(self.SetNameButton())
         elif self.current_step == 2:
-            self.add_item(ui.RoleSelect(placeholder="Select a support role...", custom_id="role_select"))
-            is_claimable = self.panel_data['claimable']
-            self.add_item(ui.Button(
-                label="Disable Claiming" if is_claimable else "Enable Claiming",
-                style=discord.ButtonStyle.red if is_claimable else discord.ButtonStyle.green,
-                custom_id="toggle_claim"
-            ))
+            self.add_item(self.RoleSelect())
+            self.add_item(self.ToggleClaimButton())
         elif self.current_step == 3:
-            self.add_item(ui.ChannelSelect(placeholder="Select a category...", channel_types=[discord.ChannelType.category], custom_id="category_select"))
+            self.add_item(self.CategorySelect())
         elif self.current_step == 4:
-            self.add_item(ui.ChannelSelect(placeholder="Select a transcript channel...", channel_types=[discord.ChannelType.text], custom_id="transcript_select"))
+            self.add_item(self.TranscriptChannelSelect())
         elif self.current_step == 5:
-            self.add_item(ui.ChannelSelect(placeholder="Select a panel channel...", channel_types=[discord.ChannelType.text], custom_id="panel_channel_select"))
+            self.add_item(self.PanelChannelSelect())
 
-        if self.current_step > 1:
-            self.add_item(ui.Button(label="Back", style=discord.ButtonStyle.grey, custom_id="back", row=4))
-        
-        next_label = "Finish" if self.current_step == 5 else "Save & Continue"
-        self.add_item(ui.Button(label=next_label, style=discord.ButtonStyle.green, custom_id="next", row=4))
-        self.add_item(ui.Button(label="Cancel", style=discord.ButtonStyle.red, custom_id="cancel", row=4))
+        if self.current_step > 1: self.add_item(self.BackButton())
+        self.add_item(self.NextButton())
+        self.add_item(self.CancelButton())
 
-    async def update_view(self, interaction: discord.Interaction):
+    async def update_message(self):
         self.update_components()
         embed = self.create_embed()
         try:
-            await interaction.message.edit(embed=embed, view=self)
+            if self.message:
+                await self.message.edit(embed=embed, view=self)
         except discord.NotFound:
-            # The original message was likely dismissed by the user.
-            pass
+            pass # Message was dismissed
 
-    async def dispatch_interaction(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
-        
-        if custom_id == "set_name":
-            await interaction.response.send_modal(PanelNameModal(self))
-            return
-        elif 'select' in custom_id:
-            value = interaction.data['values'][0]
-            if custom_id == 'role_select': self.panel_data['support_role'] = interaction.guild.get_role(int(value))
-            else:
-                channel = interaction.guild.get_channel(int(value))
-                if custom_id == 'category_select': self.panel_data['category'] = channel
-                elif custom_id == 'transcript_select': self.panel_data['transcript_channel'] = channel
-                elif custom_id == 'panel_channel_select': self.panel_data['panel_channel'] = channel
-        elif custom_id == "toggle_claim":
-            self.panel_data['claimable'] = not self.panel_data['claimable']
-        elif custom_id == "back":
-            self.current_step -= 1
-        elif custom_id == "cancel":
-            try: await interaction.message.delete()
-            except discord.NotFound: pass
-            await interaction.response.send_message("Panel creation cancelled.", ephemeral=True)
-            self.stop()
-            return
-        elif custom_id == "next":
-            if self.current_step == 5:
-                pd = self.panel_data
+    # --- Nested Component Classes with Callbacks ---
+
+    class SetNameButton(ui.Button):
+        def __init__(self): super().__init__(label="Set Name", style=discord.ButtonStyle.secondary)
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.send_modal(PanelNameModal(view=self.view))
+
+    class RoleSelect(ui.RoleSelect):
+        def __init__(self): super().__init__(placeholder="Select a support role...")
+        async def callback(self, interaction: discord.Interaction):
+            self.view.panel_data['support_role'] = self.values[0]
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class ToggleClaimButton(ui.Button):
+        def __init__(self):
+            # This is created dynamically, so we can't access self.view here.
+            # Style and label must be set in update_components. This is just a placeholder.
+            super().__init__(label="Toggle Claiming")
+        async def callback(self, interaction: discord.Interaction):
+            self.view.panel_data['claimable'] = not self.view.panel_data['claimable']
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class CategorySelect(ui.ChannelSelect):
+        def __init__(self): super().__init__(placeholder="Select a category...", channel_types=[discord.ChannelType.category])
+        async def callback(self, interaction: discord.Interaction):
+            self.view.panel_data['category'] = self.values[0]
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class TranscriptChannelSelect(ui.ChannelSelect):
+        def __init__(self): super().__init__(placeholder="Select a transcript channel...", channel_types=[discord.ChannelType.text])
+        async def callback(self, interaction: discord.Interaction):
+            self.view.panel_data['transcript_channel'] = self.values[0]
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class PanelChannelSelect(ui.ChannelSelect):
+        def __init__(self): super().__init__(placeholder="Select a panel channel...", channel_types=[discord.ChannelType.text])
+        async def callback(self, interaction: discord.Interaction):
+            self.view.panel_data['panel_channel'] = self.values[0]
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class BackButton(ui.Button):
+        def __init__(self): super().__init__(label="Back", style=discord.ButtonStyle.grey, row=4)
+        async def callback(self, interaction: discord.Interaction):
+            self.view.current_step -= 1
+            await interaction.response.defer()
+            await self.view.update_message()
+
+    class NextButton(ui.Button):
+        def __init__(self):
+            # Label is set dynamically in update_components.
+            super().__init__(style=discord.ButtonStyle.green, row=4)
+        async def callback(self, interaction: discord.Interaction):
+            if self.view.current_step == 5:
+                pd = self.view.panel_data
                 if not all([pd['support_role'], pd['category'], pd['transcript_channel'], pd['panel_channel']]):
-                    return await interaction.response.send_message("Please complete all fields before finishing.", ephemeral=True)
+                    return await interaction.response.send_message("Please complete all required fields before finishing.", ephemeral=True)
                 
                 await interaction.response.defer()
-                conn, cursor = self.bot.get_db_connection()
+                conn, cursor = self.view.bot.get_db_connection()
                 cursor.execute("INSERT INTO panels (guild_id, panel_name, support_role_id, category_id, transcript_channel_id, channel_id, is_claimable) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                (interaction.guild.id, pd['name'], pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, pd['panel_channel'].id, 1 if pd['claimable'] else 0))
                 panel_id = cursor.lastrowid
                 conn.commit()
 
                 panel_embed = discord.Embed(title=pd['name'], description="To create a ticket, use the button below.", color=discord.Color.green())
-                panel_message = await pd['panel_channel'].send(embed=panel_embed, view=self.bot.get_cog('TicketSystem').CreateTicketView())
+                panel_message = await pd['panel_channel'].send(embed=panel_embed, view=self.view.bot.get_cog('TicketSystem').CreateTicketView())
                 
                 cursor.execute("UPDATE panels SET message_id = ? WHERE panel_id = ?", (panel_message.id, panel_id))
                 conn.commit()
                 
                 try: await interaction.message.delete()
                 except discord.NotFound: pass
-
+                
                 await interaction.followup.send(f"Panel '{pd['name']}' created successfully in {pd['panel_channel'].mention}!", ephemeral=True)
-                self.stop()
-                return
+                self.view.stop()
             else:
-                self.current_step += 1
-        
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        await self.update_view(interaction)
+                self.view.current_step += 1
+                await interaction.response.defer()
+                await self.view.update_message()
+
+    class CancelButton(ui.Button):
+        def __init__(self): super().__init__(label="Cancel", style=discord.ButtonStyle.red, row=4)
+        async def callback(self, interaction: discord.Interaction):
+            try: await interaction.message.delete()
+            except discord.NotFound: pass
+            await interaction.response.send_message("Panel creation cancelled.", ephemeral=True)
+            self.view.stop()
+
+# --- Cog Definition ---
 
 class Panel(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -164,19 +196,9 @@ class Panel(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def setup(self, interaction: discord.Interaction):
         view = SetupView(self.bot, interaction.user)
-        view.update_components()
         embed = view.create_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
-
-        async def view_interaction_handler(inter):
-            if inter.message and view.message and inter.message.id == view.message.id:
-                 await view.dispatch_interaction(inter)
-        
-        # This listener is now safe because the view manages its own state
-        self.bot.add_listener(view_interaction_handler, 'on_interaction')
-        view.on_timeout = lambda: self.bot.remove_listener(view_interaction_handler, 'on_interaction')
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Panel(bot))
