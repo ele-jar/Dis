@@ -61,16 +61,22 @@ class TicketSystem(commands.Cog):
             guild, support_role, category = interaction.guild, interaction.guild.get_role(role_id), interaction.guild.get_channel(cat_id)
             if not support_role or not category: return await interaction.followup.send("Configuration error: Support role or category not found.", ephemeral=True)
 
-            ticket_num = (cursor.execute("SELECT MAX(ticket_num) FROM tickets WHERE guild_id = ?", (guild.id,)).fetchone()[0] or 0) + 1
+            cursor.execute("INSERT INTO tickets (guild_id, panel_id, channel_id, owner_id, status, ticket_num) VALUES (?, ?, ?, ?, ?, ?)", (guild.id, panel_id, 0, interaction.user.id, 'open', 0))
+            ticket_id = cursor.lastrowid
+            conn.commit()
+
+            ticket_num = ticket_id
             
             overwrites = { guild.default_role: discord.PermissionOverwrite(read_messages=False), interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True), support_role: discord.PermissionOverwrite(read_messages=True, send_messages=True), guild.me: discord.PermissionOverwrite(read_messages=True) }
             
             try:
                 channel = await category.create_text_channel(name=f"ticket-{ticket_num:04d}", overwrites=overwrites)
             except discord.Forbidden:
+                cursor.execute("DELETE FROM tickets WHERE ticket_id = ?", (ticket_id,))
+                conn.commit()
                 return await interaction.followup.send("I lack permissions to create channels in the ticket category.", ephemeral=True)
 
-            cursor.execute("INSERT INTO tickets (guild_id, panel_id, channel_id, owner_id, status, ticket_num) VALUES (?, ?, ?, ?, ?, ?)", (guild.id, panel_id, channel.id, interaction.user.id, 'open', ticket_num))
+            cursor.execute("UPDATE tickets SET channel_id = ?, ticket_num = ? WHERE ticket_id = ?", (channel.id, ticket_num, ticket_id))
             conn.commit()
             
             embed = discord.Embed(title="Welcome to your ticket!", description="Support will be with you shortly. To close this ticket, press the button below.", color=discord.Color.dark_green())
@@ -113,7 +119,7 @@ class TicketSystem(commands.Cog):
             if not owner_id or interaction.user.id != owner_id[0]:
                 return await interaction.response.send_message("Only the ticket owner can use this button.", ephemeral=True)
             
-            await interaction.message.edit(content="Closing ticket as requested by owner...", view=None)
+            await interaction.response.defer()
             await interaction.client.get_cog("TicketCommands").execute_close(interaction, interaction.user)
 
 async def setup(bot: commands.Bot):
