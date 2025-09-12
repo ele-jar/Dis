@@ -66,7 +66,6 @@ class TicketBot(commands.Bot):
                 print(f'Failed to load extension {extension}.')
                 print(e)
         
-        # Add persistent views from the TicketSystem cog
         ticket_system_cog = self.get_cog('TicketSystem')
         if ticket_system_cog:
             self.add_view(ticket_system_cog.CreateTicketView())
