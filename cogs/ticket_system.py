@@ -49,11 +49,12 @@ class TicketSystem(commands.Cog):
             await interaction.response.defer(ephemeral=True, thinking=True)
             
             conn, cursor = interaction.client.get_db_connection()
-            cursor.execute("SELECT * FROM panels WHERE message_id = ?", (interaction.message.id,))
-            panel = cursor.fetchone()
-            if not panel: return await interaction.followup.send("This ticket panel is outdated.", ephemeral=True)
+            # Fetch the new custom text columns from the database
+            cursor.execute("SELECT panel_id, support_role_id, category_id, welcome_message FROM panels WHERE message_id = ?", (interaction.message.id,))
+            panel_data = cursor.fetchone()
+            if not panel_data: return await interaction.followup.send("This ticket panel is outdated.", ephemeral=True)
             
-            panel_id, _, panel_name, _, _, role_id, cat_id, _, _ = panel
+            panel_id, role_id, cat_id, welcome_message = panel_data
             
             cursor.execute("SELECT * FROM tickets WHERE owner_id = ? AND status = 'open' AND panel_id = ?", (interaction.user.id, panel_id))
             if cursor.fetchone(): return await interaction.followup.send("You already have an open ticket from this panel.", ephemeral=True)
@@ -64,13 +65,11 @@ class TicketSystem(commands.Cog):
             cursor.execute("INSERT INTO tickets (guild_id, panel_id, channel_id, owner_id, status, ticket_num) VALUES (?, ?, ?, ?, ?, ?)", (guild.id, panel_id, 0, interaction.user.id, 'open', 0))
             ticket_id = cursor.lastrowid
             conn.commit()
-
             ticket_num = ticket_id
             
             overwrites = { guild.default_role: discord.PermissionOverwrite(read_messages=False), interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True), support_role: discord.PermissionOverwrite(read_messages=True, send_messages=True), guild.me: discord.PermissionOverwrite(read_messages=True) }
             
-            try:
-                channel = await category.create_text_channel(name=f"ticket-{ticket_num:04d}", overwrites=overwrites)
+            try: channel = await category.create_text_channel(name=f"ticket-{ticket_num:04d}", overwrites=overwrites)
             except discord.Forbidden:
                 cursor.execute("DELETE FROM tickets WHERE ticket_id = ?", (ticket_id,))
                 conn.commit()
@@ -79,7 +78,7 @@ class TicketSystem(commands.Cog):
             cursor.execute("UPDATE tickets SET channel_id = ?, ticket_num = ? WHERE ticket_id = ?", (channel.id, ticket_num, ticket_id))
             conn.commit()
             
-            embed = discord.Embed(title="Welcome to your ticket!", description="Support will be with you shortly. To close this ticket, press the button below.", color=discord.Color.dark_green())
+            embed = discord.Embed(title="Welcome to your ticket!", description=welcome_message, color=discord.Color.dark_green())
             await channel.send(f"{interaction.user.mention} {support_role.mention}", embed=embed, view=interaction.client.get_cog('TicketSystem').OpenTicketView())
             await interaction.followup.send(f"Your ticket has been created: {channel.mention}", ephemeral=True)
 
@@ -88,6 +87,18 @@ class TicketSystem(commands.Cog):
         
         @ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="persistent:close_ticket")
         async def close_ticket(self, interaction: discord.Interaction, button: ui.Button):
+            conn, cursor = interaction.client.get_db_connection()
+            cursor.execute("SELECT p.support_role_id FROM tickets t JOIN panels p ON t.panel_id = p.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
+            result = cursor.fetchone()
+            if not result: return
+            
+            support_role_id = result[0]
+            support_role = interaction.guild.get_role(support_role_id)
+
+            # **THE FIX IS HERE: This check now ONLY allows staff or admins to close the ticket.**
+            if not (support_role in interaction.user.roles or interaction.user.guild_permissions.administrator):
+                return await interaction.response.send_message("Only staff members can close this ticket.", ephemeral=True)
+
             await interaction.response.defer()
             await interaction.client.get_cog("TicketCommands").execute_close(interaction, interaction.user)
     
