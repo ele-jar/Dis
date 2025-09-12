@@ -35,11 +35,8 @@ class TicketCommands(commands.Cog):
         conn, cursor = self.bot.get_db_connection()
         cursor.execute("SELECT t.*, p.transcript_channel_id FROM tickets t JOIN panels p ON t.panel_id = p.panel_id WHERE t.channel_id = ? AND t.status = 'open'", (interaction.channel.id,))
         ticket = cursor.fetchone()
-        if not ticket: 
-            if interaction.response.is_done():
-                await interaction.followup.send("This is not an open ticket.", ephemeral=True)
-            else:
-                await interaction.response.send_message("This is not an open ticket.", ephemeral=True)
+        if not ticket:
+            await interaction.followup.send("This is not an open ticket.", ephemeral=True)
             return
 
         _, _, _, _, owner_id, _, ticket_num, _, trans_channel_id = ticket
@@ -57,10 +54,8 @@ class TicketCommands(commands.Cog):
             await trans_channel.send(f"Transcript for ticket `#{ticket_num}` created by {owner.mention if owner else 'Unknown User'}", file=discord.File(transcript_filename))
         os.remove(transcript_filename)
         
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
-        else:
-            await interaction.response.send_message(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
+        # BUG FIX: Edit the existing message instead of sending a new one.
+        await interaction.message.edit(content=None, embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
 
 
     async def execute_open(self, interaction: discord.Interaction):
@@ -78,7 +73,9 @@ class TicketCommands(commands.Cog):
             await interaction.channel.set_permissions(owner, send_messages=True, read_messages=True)
         
         embed = discord.Embed(title="Ticket Re-Opened", description=f"Ticket re-opened by {interaction.user.mention}.", color=discord.Color.green())
-        await interaction.followup.send(embed=embed, view=self.bot.get_cog('TicketSystem').OpenTicketView())
+
+        # BUG FIX: Edit the existing message instead of sending a new one.
+        await interaction.message.edit(content=None, embed=embed, view=self.bot.get_cog('TicketSystem').OpenTicketView())
 
     @app_commands.command(name="add")
     @app_commands.check(is_support_staff)
