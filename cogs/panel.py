@@ -2,14 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands, ui
 
-# --- UI Components ---
-
 class PanelNameModal(ui.Modal, title='Set Panel Name'):
     panel_name_input = ui.TextInput(label='Panel Name', placeholder='e.g., General Support', required=True, max_length=100)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # This modal only needs to pass the data back to the view that created it.
-        # It doesn't need to update any messages itself.
         await interaction.response.defer()
         self.view.panel_data['name'] = self.panel_name_input.value
         await self.view.update_message()
@@ -40,7 +36,7 @@ class SetupView(ui.View):
             try:
                 await self.message.edit(content="This setup panel has expired.", view=self)
             except discord.NotFound:
-                pass # Message was already deleted or dismissed
+                pass
 
     def create_embed(self):
         descriptions = [
@@ -91,9 +87,7 @@ class SetupView(ui.View):
             if self.message:
                 await self.message.edit(embed=embed, view=self)
         except discord.NotFound:
-            pass # Message was dismissed
-
-    # --- Nested Component Classes with Callbacks ---
+            pass
 
     class SetNameButton(ui.Button):
         def __init__(self): super().__init__(label="Set Name", style=discord.ButtonStyle.secondary)
@@ -109,8 +103,6 @@ class SetupView(ui.View):
 
     class ToggleClaimButton(ui.Button):
         def __init__(self):
-            # This is created dynamically, so we can't access self.view here.
-            # Style and label must be set in update_components. This is just a placeholder.
             super().__init__(label="Toggle Claiming")
         async def callback(self, interaction: discord.Interaction):
             self.view.panel_data['claimable'] = not self.view.panel_data['claimable']
@@ -147,7 +139,6 @@ class SetupView(ui.View):
 
     class NextButton(ui.Button):
         def __init__(self):
-            # Label is set dynamically in update_components.
             super().__init__(style=discord.ButtonStyle.green, row=4)
         async def callback(self, interaction: discord.Interaction):
             if self.view.current_step == 5:
@@ -174,6 +165,14 @@ class SetupView(ui.View):
                 await interaction.followup.send(f"Panel '{pd['name']}' created successfully in {pd['panel_channel'].mention}!", ephemeral=True)
                 self.view.stop()
             else:
+                pd = self.view.panel_data
+                if self.view.current_step == 2 and not pd['support_role']:
+                    return await interaction.response.send_message("Please select a support role before proceeding.", ephemeral=True)
+                if self.view.current_step == 3 and not pd['category']:
+                    return await interaction.response.send_message("Please select a ticket category before proceeding.", ephemeral=True)
+                if self.view.current_step == 4 and not pd['transcript_channel']:
+                    return await interaction.response.send_message("Please select a transcript channel before proceeding.", ephemeral=True)
+
                 self.view.current_step += 1
                 await interaction.response.defer()
                 await self.view.update_message()
@@ -185,8 +184,6 @@ class SetupView(ui.View):
             except discord.NotFound: pass
             await interaction.response.send_message("Panel creation cancelled.", ephemeral=True)
             self.view.stop()
-
-# --- Cog Definition ---
 
 class Panel(commands.Cog):
     def __init__(self, bot: commands.Bot):
