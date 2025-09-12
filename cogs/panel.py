@@ -6,9 +6,10 @@ class PanelNameModal(ui.Modal, title='Set Panel Name'):
     panel_name_input = ui.TextInput(label='Panel Name', placeholder='e.g., General Support', required=True, max_length=100)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         self.view.panel_data['name'] = self.panel_name_input.value
         await self.view.update_message()
+        # Acknowledge the modal submission. The view update happens above.
+        await interaction.response.defer()
 
 class SetupView(ui.View):
     def __init__(self, bot, author):
@@ -79,7 +80,7 @@ class SetupView(ui.View):
         if self.current_step > 1: self.add_item(self.BackButton())
         self.add_item(self.NextButton())
         self.add_item(self.CancelButton())
-
+    
     async def update_message(self):
         self.update_components()
         embed = self.create_embed()
@@ -139,14 +140,20 @@ class SetupView(ui.View):
 
     class NextButton(ui.Button):
         def __init__(self):
-            super().__init__(style=discord.ButtonStyle.green, row=4)
+             super().__init__(style=discord.ButtonStyle.green, row=4)
+             # The label will be set in update_components before this button is added
+        
+        @property
+        def label(self):
+            return "Save & Continue" if self.view.current_step == 5 else "Next"
+        
         async def callback(self, interaction: discord.Interaction):
             if self.view.current_step == 5:
                 pd = self.view.panel_data
                 if not all([pd['support_role'], pd['category'], pd['transcript_channel'], pd['panel_channel']]):
                     return await interaction.response.send_message("Please complete all required fields before finishing.", ephemeral=True)
                 
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
                 conn, cursor = self.view.bot.get_db_connection()
                 cursor.execute("INSERT INTO panels (guild_id, panel_name, support_role_id, category_id, transcript_channel_id, channel_id, is_claimable) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                (interaction.guild.id, pd['name'], pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, pd['panel_channel'].id, 1 if pd['claimable'] else 0))
@@ -159,8 +166,10 @@ class SetupView(ui.View):
                 cursor.execute("UPDATE panels SET message_id = ? WHERE panel_id = ?", (panel_message.id, panel_id))
                 conn.commit()
                 
-                try: await interaction.message.delete()
-                except discord.NotFound: pass
+                try: 
+                    await self.view.message.delete()
+                except discord.NotFound: 
+                    pass
                 
                 await interaction.followup.send(f"Panel '{pd['name']}' created successfully in {pd['panel_channel'].mention}!", ephemeral=True)
                 self.view.stop()
@@ -180,8 +189,10 @@ class SetupView(ui.View):
     class CancelButton(ui.Button):
         def __init__(self): super().__init__(label="Cancel", style=discord.ButtonStyle.red, row=4)
         async def callback(self, interaction: discord.Interaction):
-            try: await interaction.message.delete()
-            except discord.NotFound: pass
+            try: 
+                await self.view.message.delete()
+            except discord.NotFound: 
+                pass
             await interaction.response.send_message("Panel creation cancelled.", ephemeral=True)
             self.view.stop()
 
@@ -194,7 +205,8 @@ class Panel(commands.Cog):
     async def setup(self, interaction: discord.Interaction):
         view = SetupView(self.bot, interaction.user)
         embed = view.create_embed()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # ** THE FIX IS HERE: The message is no longer ephemeral **
+        await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
 async def setup(bot: commands.Bot):
