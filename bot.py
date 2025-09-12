@@ -32,7 +32,10 @@ class TicketBot(commands.Bot):
                 support_role_id INTEGER NOT NULL,
                 category_id INTEGER NOT NULL,
                 transcript_channel_id INTEGER NOT NULL,
-                is_claimable INTEGER DEFAULT 0
+                is_claimable INTEGER DEFAULT 0,
+                panel_description TEXT,
+                button_text TEXT,
+                welcome_message TEXT
             )
         ''')
         
