@@ -2,8 +2,13 @@ import discord
 from discord.ext import commands
 from discord import app_commands, ui
 
-class PanelNameModal(ui.Modal, title='Set Panel Name'):
+# FIX 1: The Modal now correctly accepts the view that created it.
+class PanelNameModal(ui.Modal):
     panel_name_input = ui.TextInput(label='Panel Name', placeholder='e.g., General Support', required=True, max_length=100)
+
+    def __init__(self, *, title: str = "Set Panel Name", view: ui.View) -> None:
+        super().__init__(title=title)
+        self.view = view
 
     async def on_submit(self, interaction: discord.Interaction):
         self.view.panel_data['name'] = self.panel_name_input.value
@@ -92,6 +97,7 @@ class SetupView(ui.View):
     class SetNameButton(ui.Button):
         def __init__(self): super().__init__(label="Set Name", style=discord.ButtonStyle.secondary)
         async def callback(self, interaction: discord.Interaction):
+            # FIX 1: Pass the view correctly to the Modal's new constructor
             await interaction.response.send_modal(PanelNameModal(view=self.view))
 
     class RoleSelect(ui.RoleSelect):
@@ -139,12 +145,10 @@ class SetupView(ui.View):
 
     class NextButton(ui.Button):
         def __init__(self):
-             # **THE FIX IS HERE: Added a default label to the constructor**
              super().__init__(label="Next", style=discord.ButtonStyle.green, row=4)
         
         @property
         def label(self):
-            # This property will still dynamically change the label text
             return "Save & Continue" if self.view.current_step == 5 else "Next"
         
         async def callback(self, interaction: discord.Interaction):
@@ -154,14 +158,20 @@ class SetupView(ui.View):
                     return await interaction.response.send_message("Please complete all required fields before finishing.", ephemeral=True)
                 
                 await interaction.response.defer(ephemeral=True)
+
+                # FIX 2: Get the full channel object from its ID before trying to send a message to it.
+                panel_channel_obj = interaction.guild.get_channel(pd['panel_channel'].id)
+                if not panel_channel_obj:
+                    return await interaction.followup.send("Error: The selected panel channel could not be found.", ephemeral=True)
+
                 conn, cursor = self.view.bot.get_db_connection()
                 cursor.execute("INSERT INTO panels (guild_id, panel_name, support_role_id, category_id, transcript_channel_id, channel_id, is_claimable) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                               (interaction.guild.id, pd['name'], pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, pd['panel_channel'].id, 1 if pd['claimable'] else 0))
+                               (interaction.guild.id, pd['name'], pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, panel_channel_obj.id, 1 if pd['claimable'] else 0))
                 panel_id = cursor.lastrowid
                 conn.commit()
 
                 panel_embed = discord.Embed(title=pd['name'], description="To create a ticket, use the button below.", color=discord.Color.green())
-                panel_message = await pd['panel_channel'].send(embed=panel_embed, view=self.view.bot.get_cog('TicketSystem').CreateTicketView())
+                panel_message = await panel_channel_obj.send(embed=panel_embed, view=self.view.bot.get_cog('TicketSystem').CreateTicketView())
                 
                 cursor.execute("UPDATE panels SET message_id = ? WHERE panel_id = ?", (panel_message.id, panel_id))
                 conn.commit()
@@ -171,7 +181,7 @@ class SetupView(ui.View):
                 except discord.NotFound: 
                     pass
                 
-                await interaction.followup.send(f"Panel '{pd['name']}' created successfully in {pd['panel_channel'].mention}!", ephemeral=True)
+                await interaction.followup.send(f"Panel '{pd['name']}' created successfully in {panel_channel_obj.mention}!", ephemeral=True)
                 self.view.stop()
             else:
                 pd = self.view.panel_data
