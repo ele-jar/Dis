@@ -8,7 +8,6 @@ class PanelNameModal(ui.Modal, title='Set Panel Name'):
     async def on_submit(self, interaction: discord.Interaction):
         self.view.panel_data['name'] = self.panel_name_input.value
         await self.view.update_message()
-        # Acknowledge the modal submission. The view update happens above.
         await interaction.response.defer()
 
 class SetupView(ui.View):
@@ -140,11 +139,12 @@ class SetupView(ui.View):
 
     class NextButton(ui.Button):
         def __init__(self):
-             super().__init__(style=discord.ButtonStyle.green, row=4)
-             # The label will be set in update_components before this button is added
+             # **THE FIX IS HERE: Added a default label to the constructor**
+             super().__init__(label="Next", style=discord.ButtonStyle.green, row=4)
         
         @property
         def label(self):
+            # This property will still dynamically change the label text
             return "Save & Continue" if self.view.current_step == 5 else "Next"
         
         async def callback(self, interaction: discord.Interaction):
@@ -205,7 +205,6 @@ class Panel(commands.Cog):
     async def setup(self, interaction: discord.Interaction):
         view = SetupView(self.bot, interaction.user)
         embed = view.create_embed()
-        # ** THE FIX IS HERE: The message is no longer ephemeral **
         await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
