@@ -8,14 +8,15 @@ from .ticket_system import generate_transcript_file
 async def is_ticket_channel(interaction: discord.Interaction) -> bool:
     conn, cursor = interaction.client.get_db_connection()
     cursor.execute("SELECT 1 FROM tickets WHERE channel_id = ?", (interaction.channel.id,))
-    is_ticket = cursor.fetchone() is not None
-    if not is_ticket:
-        await interaction.response.send_message("This command can only be used in a ticket channel.", ephemeral=True)
-    return is_ticket
+    return cursor.fetchone() is not None
 
 async def is_support_staff(interaction: discord.Interaction) -> bool:
-    if not await is_ticket_channel(interaction): return False
     conn, cursor = interaction.client.get_db_connection()
+    cursor.execute("SELECT 1 FROM tickets WHERE channel_id = ?", (interaction.channel.id,))
+    if not cursor.fetchone():
+        await interaction.response.send_message("This command can only be used in a ticket channel.", ephemeral=True, delete_after=10)
+        return False
+        
     cursor.execute("SELECT p.support_role_id FROM panels p JOIN tickets t ON p.panel_id = t.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
     role_id = cursor.fetchone()
     if not role_id: return False
@@ -34,7 +35,12 @@ class TicketCommands(commands.Cog):
         conn, cursor = self.bot.get_db_connection()
         cursor.execute("SELECT t.*, p.transcript_channel_id FROM tickets t JOIN panels p ON t.panel_id = p.panel_id WHERE t.channel_id = ? AND t.status = 'open'", (interaction.channel.id,))
         ticket = cursor.fetchone()
-        if not ticket: return await interaction.followup.send("This is not an open ticket.", ephemeral=True)
+        if not ticket: 
+            if interaction.response.is_done():
+                await interaction.followup.send("This is not an open ticket.", ephemeral=True)
+            else:
+                await interaction.response.send_message("This is not an open ticket.", ephemeral=True)
+            return
 
         _, _, _, _, owner_id, _, ticket_num, _, trans_channel_id = ticket
         cursor.execute("UPDATE tickets SET status = 'closed' WHERE channel_id = ?", (interaction.channel.id,))
@@ -51,7 +57,11 @@ class TicketCommands(commands.Cog):
             await trans_channel.send(f"Transcript for ticket `#{ticket_num}` created by {owner.mention if owner else 'Unknown User'}", file=discord.File(transcript_filename))
         os.remove(transcript_filename)
         
-        await interaction.followup.send(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
+        else:
+            await interaction.response.send_message(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
+
 
     async def execute_open(self, interaction: discord.Interaction):
         conn, cursor = self.bot.get_db_connection()
