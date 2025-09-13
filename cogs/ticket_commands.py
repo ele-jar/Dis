@@ -14,14 +14,16 @@ async def is_support_staff(interaction: discord.Interaction) -> bool:
             await interaction.response.send_message("This command can only be used in a ticket channel.", ephemeral=True, delete_after=10)
             return False
             
-        cursor.execute("SELECT p.support_role_id FROM panels p JOIN tickets t ON p.panel_id = t.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
-        role_id_tuple = cursor.fetchone()
-        if not role_id_tuple: return False
+        # UPDATED: Select support_role_ids
+        cursor.execute("SELECT p.support_role_ids FROM panels p JOIN tickets t ON p.panel_id = t.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
+        role_ids_tuple = cursor.fetchone()
+        if not role_ids_tuple: return False
     
-    support_role = interaction.guild.get_role(role_id_tuple[0])
-    if not support_role: return False # Role might have been deleted
+    # NEW: Logic to check multiple roles
+    support_role_ids = {int(r_id) for r_id in role_ids_tuple[0].split(',') if r_id}
+    user_role_ids = {role.id for role in interaction.user.roles}
 
-    if not (support_role in interaction.user.roles or interaction.user.guild_permissions.administrator):
+    if not (user_role_ids.intersection(support_role_ids) or interaction.user.guild_permissions.administrator):
         await interaction.response.send_message("You do not have the required support role to use this command.", ephemeral=True)
         return False
     return True
@@ -37,7 +39,6 @@ class TicketCommands(commands.Cog):
             cursor.execute("SELECT t.*, p.transcript_channel_id FROM tickets t JOIN panels p ON t.panel_id = p.panel_id WHERE t.channel_id = ? AND t.status = 'open'", (interaction.channel.id,))
             ticket = cursor.fetchone()
             if not ticket:
-                # Use followup if original interaction was deferred
                 if interaction.response.is_done():
                     await interaction.followup.send("This is not an open ticket.", ephemeral=True)
                 else:
@@ -59,10 +60,9 @@ class TicketCommands(commands.Cog):
             await trans_channel.send(f"Transcript for ticket `#{ticket['ticket_num']}` created by {owner_mention}", file=discord.File(transcript_filename))
         os.remove(transcript_filename)
         
-        # Edit the existing message if the interaction came from a button
         if interaction.message:
             await interaction.message.edit(content=None, embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
-        else: # Send a new message if it came from a slash command
+        else:
             await interaction.channel.send(embed=embed, view=self.bot.get_cog('TicketSystem').ClosedTicketView())
 
     async def execute_open(self, interaction: discord.Interaction):
