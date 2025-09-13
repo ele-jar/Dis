@@ -1,3 +1,5 @@
+# In file: Dis-main/bot.py
+
 import discord
 from discord.ext import commands
 import os
@@ -29,7 +31,7 @@ class TicketBot(commands.Bot):
                     panel_name TEXT NOT NULL,
                     message_id INTEGER,
                     channel_id INTEGER,
-                    support_role_id INTEGER NOT NULL,
+                    support_role_ids TEXT NOT NULL, -- CHANGED: From support_role_id INTEGER
                     category_id INTEGER NOT NULL,
                     transcript_channel_id INTEGER NOT NULL,
                     is_claimable INTEGER DEFAULT 0,
