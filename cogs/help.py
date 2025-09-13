@@ -9,18 +9,20 @@ class HelpCommand(commands.Cog):
     @app_commands.command(name="help", description="Shows the list of ticket tool commands.")
     async def help(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="Ticket Tool Ticket Commands",
+            title="Ticket Tool Commands",
             color=discord.Color.blurple()
         )
-        embed.add_field(name="/add `target`", value="Gives a user or role access to the current ticket channel.", inline=False)
-        embed.add_field(name="/remove `target`", value="Removes a user or role's access to the ticket channel.", inline=False)
-        embed.add_field(name="/open", value="Re-opens a ticket channel that is in the Closed state.", inline=False)
-        embed.add_field(name="/close", value="Closes a ticket channel that is in the Opened state.", inline=False)
-        embed.add_field(name="/rename `name`", value="Changes the ticket name.", inline=False)
-        embed.add_field(name="/claim", value="Allows a support team member to claim or unclaim the ticket.", inline=False)
-        embed.add_field(name="/closerequest", value="Sends a Close Ask Message to the ticket channel.", inline=False)
-        embed.add_field(name="/transcript", value="Generates a transcript of the ticket.", inline=False)
-        embed.set_footer(text="Use /setup to create a new ticket panel.")
+        embed.add_field(name="/setup", value="Guides you through creating a new ticket panel.", inline=False)
+        embed.add_field(name="/editpanel", value="Allows you to edit an existing ticket panel.", inline=False)
+        embed.add_field(name="Ticket Management Commands", value="These can only be used inside a ticket channel.", inline=False)
+        embed.add_field(name="/add `target`", value="Gives a user or role access to the current ticket channel.", inline=True)
+        embed.add_field(name="/remove `target`", value="Removes a user or role's access to the ticket channel.", inline=True)
+        embed.add_field(name="/open", value="Re-opens a ticket channel.", inline=True)
+        embed.add_field(name="/close", value="Closes the current ticket.", inline=True)
+        embed.add_field(name="/rename `name`", value="Changes the ticket name.", inline=True)
+        embed.add_field(name="/claim", value="Claim or unclaim the ticket.", inline=True)
+        embed.add_field(name="/closerequest", value="Sends a message asking the user to confirm the ticket can be closed.", inline=True)
+        embed.add_field(name="/transcript", value="Generates a transcript of the ticket.", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
