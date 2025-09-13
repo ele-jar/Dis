@@ -9,7 +9,6 @@ import sqlite3
 import html
 
 async def generate_transcript_file(channel: discord.TextChannel):
-    # **NEW**: Comprehensive CSS for responsive design and better visuals
     css = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -49,7 +48,6 @@ async def generate_transcript_file(channel: discord.TextChannel):
         if safe_content:
             html_content += f'<div class="content">{safe_content}</div>'
         
-        # **NEW**: Handle attachments
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
@@ -57,7 +55,6 @@ async def generate_transcript_file(channel: discord.TextChannel):
                 else:
                     html_content += f'<div class="attachment"><a href="{attachment.url}" target="_blank">{html.escape(attachment.filename)}</a></div>'
 
-        # **NEW**: Handle embeds
         if message.embeds:
             for embed in message.embeds:
                 html_content += '<div class="embed">'
@@ -87,21 +84,24 @@ class TicketSystem(commands.Cog):
         self.bot = bot
 
     async def _is_support_staff(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.guild_permissions.administrator:
+            return True
+
         with sqlite3.connect(self.bot.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT p.support_role_id FROM panels p JOIN tickets t ON p.panel_id = t.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
-            role_id_tuple = cursor.fetchone()
+            # UPDATED: Select support_role_ids
+            cursor.execute("SELECT p.support_role_ids FROM panels p JOIN tickets t ON p.panel_id = t.panel_id WHERE t.channel_id = ?", (interaction.channel.id,))
+            role_ids_tuple = cursor.fetchone()
         
-        if not role_id_tuple:
+        if not role_ids_tuple:
             await interaction.response.send_message("Error: Could not find panel configuration for this ticket.", ephemeral=True)
             return False
-            
-        support_role = interaction.guild.get_role(role_id_tuple[0])
-        if not support_role:
-             await interaction.response.send_message("Error: Support role not found.", ephemeral=True)
-             return False
-
-        if not (support_role in interaction.user.roles or interaction.user.guild_permissions.administrator):
+        
+        # NEW: Logic to check multiple roles
+        support_role_ids = {int(r_id) for r_id in role_ids_tuple[0].split(',') if r_id}
+        user_role_ids = {role.id for role in interaction.user.roles}
+        
+        if not user_role_ids.intersection(support_role_ids):
             await interaction.response.send_message("You do not have the required support role for this action.", ephemeral=True)
             return False
         return True
@@ -122,9 +122,14 @@ class TicketSystem(commands.Cog):
                 
                 cursor.execute("SELECT 1 FROM tickets WHERE owner_id = ? AND status = 'open' AND panel_id = ?", (interaction.user.id, panel['panel_id']))
                 if cursor.fetchone(): return await interaction.followup.send("You already have an open ticket from this panel.", ephemeral=True)
+                
+                # NEW: Handle multiple support roles
+                guild = interaction.guild
+                support_role_ids = [int(r_id) for r_id in panel['support_role_ids'].split(',') if r_id]
+                support_roles = [guild.get_role(r_id) for r_id in support_role_ids if guild.get_role(r_id)]
+                category = guild.get_channel(panel['category_id'])
 
-                guild, support_role, category = interaction.guild, interaction.guild.get_role(panel['support_role_id']), interaction.guild.get_channel(panel['category_id'])
-                if not support_role or not category: return await interaction.followup.send("Configuration error: Support role or category not found.", ephemeral=True)
+                if not support_roles or not category: return await interaction.followup.send("Configuration error: One or more support roles or the category was not found.", ephemeral=True)
 
                 cursor.execute("INSERT INTO tickets (guild_id, panel_id, channel_id, owner_id, status, ticket_num) VALUES (?, ?, ?, ?, ?, ?)", (guild.id, panel['panel_id'], 0, interaction.user.id, 'open', 0))
                 ticket_id = cursor.lastrowid
@@ -132,7 +137,14 @@ class TicketSystem(commands.Cog):
                 cursor.execute("UPDATE tickets SET ticket_num = ? WHERE ticket_id = ?", (ticket_num, ticket_id))
                 conn.commit()
             
-            overwrites = { guild.default_role: discord.PermissionOverwrite(read_messages=False), interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True), support_role: discord.PermissionOverwrite(read_messages=True, send_messages=True), guild.me: discord.PermissionOverwrite(read_messages=True) }
+            overwrites = { 
+                guild.default_role: discord.PermissionOverwrite(read_messages=False), 
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True), 
+                guild.me: discord.PermissionOverwrite(read_messages=True) 
+            }
+            # NEW: Add all support roles to overwrites
+            for role in support_roles:
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
             
             try: channel = await category.create_text_channel(name=f"ticket-{ticket_num:04d}", overwrites=overwrites)
             except discord.Forbidden:
@@ -145,7 +157,9 @@ class TicketSystem(commands.Cog):
                 conn.commit()
             
             embed = discord.Embed(title="Welcome to your ticket!", description=panel['welcome_message'], color=discord.Color.dark_green())
-            await channel.send(f"{interaction.user.mention} {support_role.mention}", embed=embed, view=interaction.client.get_cog('TicketSystem').OpenTicketView())
+            # NEW: Mention all support roles
+            role_mentions = " ".join(r.mention for r in support_roles)
+            await channel.send(f"{interaction.user.mention} {role_mentions}", embed=embed, view=interaction.client.get_cog('TicketSystem').OpenTicketView())
             await interaction.followup.send(f"Your ticket has been created: {channel.mention}", ephemeral=True)
 
     class OpenTicketView(ui.View):
