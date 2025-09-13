@@ -190,7 +190,6 @@ class PanelConfigurationView(ui.View):
             panel_channel = pd['panel_channel']
             await interaction.response.edit_message(content="Saving panel...", embed=None, view=None)
 
-            # **IMPROVEMENT**: Delete the old panel message if it exists
             if self.view.panel_id and self.view.old_panel_channel_id and self.view.old_panel_message_id:
                 try:
                     old_channel = self.view.bot.get_channel(self.view.old_panel_channel_id)
@@ -198,7 +197,7 @@ class PanelConfigurationView(ui.View):
                         old_message = await old_channel.fetch_message(self.view.old_panel_message_id)
                         await old_message.delete()
                 except (discord.NotFound, discord.Forbidden):
-                    pass # Ignore if message is already gone or we can't access it
+                    pass 
 
             panel_embed = discord.Embed(title=pd['name'], description=pd['panel_description'], color=discord.Color.green())
             ticket_view = self.view.bot.get_cog('TicketSystem').CreateTicketView()
@@ -236,7 +235,6 @@ class PanelConfigurationView(ui.View):
             await interaction.followup.send(msg, ephemeral=True)
             self.view.stop()
 
-# --- Panel Selection View for /editpanel ---
 class PanelSelectView(ui.View):
     def __init__(self, bot: commands.Bot, author: discord.Member, panels: list):
         super().__init__(timeout=180)
@@ -272,7 +270,7 @@ class Panel(commands.Cog):
         view = PanelConfigurationView(self.bot, interaction.user)
         await view.start(interaction)
         
-    @app_a pp_commands.command(name="editpanel", description="Edit an existing ticket panel.")
+    @app_commands.command(name="editpanel", description="Edit an existing ticket panel.")
     @app_commands.checks.has_permissions(administrator=True)
     async def editpanel(self, interaction: discord.Interaction):
         with sqlite3.connect(self.bot.db_path) as conn:
