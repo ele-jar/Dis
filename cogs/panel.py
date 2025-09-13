@@ -21,13 +21,22 @@ class PanelTextSettingsModal(ui.Modal, title="Customize Panel Text"):
         self.welcome_message.default = self.view.panel_data.get("welcome_message")
 
     async def on_submit(self, interaction: discord.Interaction):
+        # FIX: Defer the modal's interaction immediately to prevent timeouts.
+        # This is the correct and stable pattern for handling modal submissions
+        # that need to edit a separate, original message.
+        await interaction.response.defer()
+
         # Update the main view's data with the modal's input
         self.view.panel_data["name"] = self.panel_name.value
         self.view.panel_data["panel_description"] = self.panel_description.value
         self.view.panel_data["button_text"] = self.button_text.value
         self.view.panel_data["welcome_message"] = self.welcome_message.value
-        # Update the main embed to show the new text
-        await self.view.update_view(interaction)
+
+        # Manually update the original message using its stored reference
+        self.view.populate_components()
+        embed = self.view.create_embed()
+        if self.view.message:
+            await self.view.message.edit(embed=embed, view=self.view)
 
 
 # --- MAIN CONFIGURATION VIEW ---
@@ -66,7 +75,10 @@ class PanelConfigurationView(ui.View):
             await self.load_panel_data(interaction.guild)
         self.populate_components()
         embed = self.create_embed()
-        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+        # FIX: Removed ephemeral=True. This makes the panel a regular message,
+        # which is much more stable and prevents "interaction failed" errors.
+        # The interaction_check ensures only the author can use it.
+        await interaction.response.send_message(embed=embed, view=self)
         self.message = await interaction.original_response()
 
     async def load_panel_data(self, guild: discord.Guild):
@@ -183,7 +195,8 @@ class PanelConfigurationView(ui.View):
             super().__init__(label="Save Changes" if is_editing else "Create Panel", style=discord.ButtonStyle.green)
         async def callback(self, interaction: discord.Interaction):
             pd = self.view.panel_data; panel_channel = pd['panel_channel']
-            await interaction.response.edit_message(content="Saving panel...", embed=None, view=None)
+            # Defer here in case deleting the old message or sending the new one is slow.
+            await interaction.response.defer()
             if self.view.panel_id and self.view.old_panel_channel_id and self.view.old_panel_message_id:
                 try:
                     old_channel = self.view.bot.get_channel(self.view.old_panel_channel_id)
@@ -194,7 +207,9 @@ class PanelConfigurationView(ui.View):
             ticket_view.children[0].label = pd['button_text']
             try: panel_message = await panel_channel.send(embed=panel_embed, view=ticket_view)
             except (discord.Forbidden, discord.HTTPException) as e:
-                return await interaction.followup.send(f"Error: Could not send panel message to {panel_channel.mention}. Please check my permissions.\n`{e}`", ephemeral=True)
+                # Use followup since we deferred
+                await interaction.followup.send(f"Error: Could not send panel message to {panel_channel.mention}. Please check my permissions.\n`{e}`", ephemeral=True)
+                return await self.view.message.delete()
             with sqlite3.connect(self.view.bot.db_path) as conn:
                 cursor = conn.cursor()
                 params = (interaction.guild.id, pd['name'], panel_message.id, panel_channel.id, pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, 1 if pd['claimable'] else 0, pd['panel_description'], pd['button_text'], pd['welcome_message'])
@@ -206,6 +221,8 @@ class PanelConfigurationView(ui.View):
                     msg = f"Panel '{pd['name']}' created successfully in {panel_channel.mention}!"
                 conn.commit()
             await interaction.followup.send(msg, ephemeral=True)
+            # Delete the configuration message now that we're done.
+            await self.view.message.delete()
             self.view.stop()
 
 
@@ -227,7 +244,8 @@ class PanelSelectView(ui.View):
             super().__init__(placeholder="Choose a panel to edit...", options=options)
         
         async def callback(self, interaction: discord.Interaction):
-            panel_id = int(self.values[0]); await interaction.message.delete()
+            await interaction.message.delete()
+            panel_id = int(self.values[0])
             edit_view = PanelConfigurationView(self.view.bot, self.view.author, panel_id)
             await edit_view.start(interaction)
 
@@ -249,6 +267,7 @@ class Panel(commands.Cog):
             cursor.execute("SELECT panel_id, panel_name FROM panels WHERE guild_id = ?", (interaction.guild.id,))
             panels = cursor.fetchall()
         if not panels: return await interaction.response.send_message("No panels found on this server to edit.", ephemeral=True)
+        # Make the panel selection ephemeral, but the config panel it opens will be regular.
         view = PanelSelectView(self.bot, interaction.user, panels)
         await interaction.response.send_message("Please select a panel to edit from the dropdown below.", view=view, ephemeral=True)
 
