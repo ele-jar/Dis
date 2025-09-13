@@ -4,7 +4,6 @@ from discord import app_commands, ui
 import sqlite3
 
 # --- MODAL FOR TEXT SETTINGS (IMPROVEMENT) ---
-# Consolidates all text inputs into one clean modal pop-up.
 class PanelTextSettingsModal(ui.Modal, title="Customize Panel Text"):
     panel_name = ui.TextInput(label="Panel Name", placeholder="e.g., General Support", max_length=100)
     panel_description = ui.TextInput(label="Panel Description", style=discord.TextStyle.paragraph, placeholder="To create a ticket, use the button below.", max_length=1024)
@@ -14,30 +13,21 @@ class PanelTextSettingsModal(ui.Modal, title="Customize Panel Text"):
     def __init__(self, view: 'PanelConfigurationView'):
         super().__init__()
         self.view = view
-        # Pre-fill the modal with existing data
         self.panel_name.default = self.view.panel_data.get("name")
         self.panel_description.default = self.view.panel_data.get("panel_description")
         self.button_text.default = self.view.panel_data.get("button_text")
         self.welcome_message.default = self.view.panel_data.get("welcome_message")
 
     async def on_submit(self, interaction: discord.Interaction):
-        # FIX: Defer the modal's interaction immediately to prevent timeouts.
-        # This is the correct and stable pattern for handling modal submissions
-        # that need to edit a separate, original message.
         await interaction.response.defer()
-
-        # Update the main view's data with the modal's input
         self.view.panel_data["name"] = self.panel_name.value
         self.view.panel_data["panel_description"] = self.panel_description.value
         self.view.panel_data["button_text"] = self.button_text.value
         self.view.panel_data["welcome_message"] = self.welcome_message.value
-
-        # Manually update the original message using its stored reference
         self.view.populate_components()
         embed = self.view.create_embed()
         if self.view.message:
             await self.view.message.edit(embed=embed, view=self.view)
-
 
 # --- MAIN CONFIGURATION VIEW ---
 class PanelConfigurationView(ui.View):
@@ -50,17 +40,16 @@ class PanelConfigurationView(ui.View):
         self.old_panel_message_id = None
         self.old_panel_channel_id = None
         self.panel_data = {
-            "name": "Support Ticket", "support_role": None, "category": None,
-            "transcript_channel": None, "panel_channel": None, "claimable": False,
+            "name": "Support Ticket", "support_roles": [], # NEW: Changed from support_role
+            "category": None, "transcript_channel": None, "panel_channel": None, "claimable": False,
             "panel_description": "To create a ticket, use the button below.",
             "button_text": "Create Ticket",
             "welcome_message": "Support will be with you shortly. To close this ticket, press the button below."
         }
-        self.required_fields = ["support_role", "category", "transcript_channel", "panel_channel"]
+        self.required_fields = ["support_roles", "category", "transcript_channel", "panel_channel"]
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.author.id:
-            return True
+        if interaction.user.id == self.author.id: return True
         await interaction.response.send_message("You cannot interact with this setup panel.", ephemeral=True)
         return False
 
@@ -75,9 +64,6 @@ class PanelConfigurationView(ui.View):
             await self.load_panel_data(interaction.guild)
         self.populate_components()
         embed = self.create_embed()
-        # FIX: Removed ephemeral=True. This makes the panel a regular message,
-        # which is much more stable and prevents "interaction failed" errors.
-        # The interaction_check ensures only the author can use it.
         await interaction.response.send_message(embed=embed, view=self)
         self.message = await interaction.original_response()
 
@@ -85,13 +71,18 @@ class PanelConfigurationView(ui.View):
         with sqlite3.connect(self.bot.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            # UPDATED: Select support_role_ids
             cursor.execute("SELECT * FROM panels WHERE panel_id = ?", (self.panel_id,))
             data = cursor.fetchone()
             if data:
+                # NEW: Logic to load multiple roles
+                support_role_ids = [int(r_id) for r_id in data["support_role_ids"].split(',') if r_id]
+                support_roles = [guild.get_role(r_id) for r_id in support_role_ids if guild.get_role(r_id)]
+                
                 self.old_panel_message_id = data["message_id"]
                 self.old_panel_channel_id = data["channel_id"]
                 self.panel_data = {
-                    "name": data["panel_name"], "support_role": guild.get_role(data["support_role_id"]),
+                    "name": data["panel_name"], "support_roles": support_roles,
                     "category": guild.get_channel(data["category_id"]), "transcript_channel": guild.get_channel(data["transcript_channel_id"]),
                     "panel_channel": guild.get_channel(data["channel_id"]), "claimable": bool(data["is_claimable"]),
                     "panel_description": data["panel_description"], "button_text": data["button_text"],
@@ -100,6 +91,10 @@ class PanelConfigurationView(ui.View):
 
     def _get_val(self, key):
         val = self.panel_data.get(key)
+        # NEW: Handle list of roles
+        if key == "support_roles":
+            if not val: return "❌ Not Set"
+            return ", ".join(role.mention for role in val)
         if isinstance(val, (discord.Role, discord.TextChannel, discord.CategoryChannel)): return val.mention
         if val is None: return "❌ Not Set"
         return str(val)
@@ -108,7 +103,7 @@ class PanelConfigurationView(ui.View):
         title = f"Editing Panel: {self.panel_data['name']}" if self.panel_id else "Creating New Ticket Panel"
         embed = discord.Embed(title=title, description="Configure the settings below. Required fields are marked with `*`.", color=discord.Color.blurple())
         embed.add_field(name="Panel Name", value=self.panel_data["name"])
-        embed.add_field(name="* Support Role", value=self._get_val("support_role"))
+        embed.add_field(name="* Support Roles", value=self._get_val("support_roles"))
         embed.add_field(name="Ticket Claiming", value="Enabled" if self.panel_data["claimable"] else "Disabled")
         embed.add_field(name="* Ticket Category", value=self._get_val("category"), inline=False)
         embed.add_field(name="* Transcript Channel", value=self._get_val("transcript_channel"))
@@ -121,13 +116,14 @@ class PanelConfigurationView(ui.View):
         return embed
 
     def all_required_filled(self):
-        return all(self.panel_data.get(key) is not None for key in self.required_fields)
+        # NEW: Check for at least one support role
+        has_support_roles = bool(self.panel_data.get("support_roles"))
+        other_fields = all(self.panel_data.get(key) is not None for key in ["category", "transcript_channel", "panel_channel"])
+        return has_support_roles and other_fields
 
     def populate_components(self):
         self.clear_items()
-        # **CRASH FIX**: Components are now added sequentially. discord.py will handle row layout automatically, preventing errors.
-        # This new layout is guaranteed to be valid.
-        self.add_item(self.RoleSelect(default=self.panel_data.get("support_role")))
+        self.add_item(self.RoleSelect(defaults=self.panel_data.get("support_roles")))
         self.add_item(self.CategorySelect(default=self.panel_data.get("category")))
         self.add_item(self.ChannelSelect(target_key="transcript_channel", placeholder="Select a transcript channel...", default=self.panel_data.get("transcript_channel")))
         self.add_item(self.ChannelSelect(target_key="panel_channel", placeholder="Select a panel channel...", default=self.panel_data.get("panel_channel")))
@@ -144,13 +140,15 @@ class PanelConfigurationView(ui.View):
         embed = self.create_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    # --- Components (now without hardcoded rows for safety) ---
     class RoleSelect(ui.RoleSelect):
-        def __init__(self, default: discord.Role = None):
-            super().__init__(placeholder="Select a support role...")
-            if default: self.default_values = [discord.Object(id=default.id)]
+        def __init__(self, defaults: list[discord.Role] = None):
+            # NEW: Allow multiple selections
+            super().__init__(placeholder="Select one or more support roles...", min_values=1, max_values=10)
+            if defaults:
+                self.default_values = [discord.Object(id=role.id) for role in defaults]
         async def callback(self, interaction: discord.Interaction):
-            self.view.panel_data['support_role'] = self.values[0]
+            # NEW: self.values is now a list
+            self.view.panel_data['support_roles'] = self.values
             await self.view.update_view(interaction)
 
     class CategorySelect(ui.ChannelSelect):
@@ -171,21 +169,18 @@ class PanelConfigurationView(ui.View):
             await self.view.update_view(interaction)
 
     class CustomizeTextButton(ui.Button):
-        def __init__(self):
-            super().__init__(label="Customize Text", style=discord.ButtonStyle.secondary)
+        def __init__(self): super().__init__(label="Customize Text", style=discord.ButtonStyle.secondary)
         async def callback(self, interaction: discord.Interaction):
             await interaction.response.send_modal(PanelTextSettingsModal(view=self.view))
 
     class ToggleClaimButton(ui.Button):
-        def __init__(self):
-            super().__init__(label="Toggle Claiming", style=discord.ButtonStyle.secondary)
+        def __init__(self): super().__init__(label="Toggle Claiming", style=discord.ButtonStyle.secondary)
         async def callback(self, interaction: discord.Interaction):
             self.view.panel_data['claimable'] = not self.view.panel_data['claimable']
             await self.view.update_view(interaction)
 
     class CancelButton(ui.Button):
-        def __init__(self):
-            super().__init__(label="Cancel", style=discord.ButtonStyle.red)
+        def __init__(self): super().__init__(label="Cancel", style=discord.ButtonStyle.red)
         async def callback(self, interaction: discord.Interaction):
             await interaction.response.edit_message(content="Operation cancelled.", embed=None, view=None)
             self.view.stop()
@@ -194,34 +189,45 @@ class PanelConfigurationView(ui.View):
         def __init__(self, is_editing: bool = False):
             super().__init__(label="Save Changes" if is_editing else "Create Panel", style=discord.ButtonStyle.green)
         async def callback(self, interaction: discord.Interaction):
-            pd = self.view.panel_data; panel_channel = pd['panel_channel']
-            # Defer here in case deleting the old message or sending the new one is slow.
             await interaction.response.defer()
+            pd = self.view.panel_data
+            
+            # FIX: Get the full channel object using its ID from the bot's cache.
+            panel_channel_from_select = pd['panel_channel']
+            panel_channel = interaction.guild.get_channel(panel_channel_from_select.id)
+            if not panel_channel:
+                 await interaction.followup.send("Error: Could not find the selected panel channel. It may have been deleted.", ephemeral=True)
+                 return
+            
             if self.view.panel_id and self.view.old_panel_channel_id and self.view.old_panel_message_id:
                 try:
                     old_channel = self.view.bot.get_channel(self.view.old_panel_channel_id)
                     if old_channel: await old_channel.get_partial_message(self.view.old_panel_message_id).delete()
                 except (discord.NotFound, discord.Forbidden): pass
+            
             panel_embed = discord.Embed(title=pd['name'], description=pd['panel_description'], color=discord.Color.green())
             ticket_view = self.view.bot.get_cog('TicketSystem').CreateTicketView()
             ticket_view.children[0].label = pd['button_text']
             try: panel_message = await panel_channel.send(embed=panel_embed, view=ticket_view)
             except (discord.Forbidden, discord.HTTPException) as e:
-                # Use followup since we deferred
                 await interaction.followup.send(f"Error: Could not send panel message to {panel_channel.mention}. Please check my permissions.\n`{e}`", ephemeral=True)
                 return await self.view.message.delete()
+            
             with sqlite3.connect(self.view.bot.db_path) as conn:
                 cursor = conn.cursor()
-                params = (interaction.guild.id, pd['name'], panel_message.id, panel_channel.id, pd['support_role'].id, pd['category'].id, pd['transcript_channel'].id, 1 if pd['claimable'] else 0, pd['panel_description'], pd['button_text'], pd['welcome_message'])
+                # NEW: Convert list of role objects to a comma-separated string of IDs
+                support_role_ids_str = ",".join(str(role.id) for role in pd['support_roles'])
+                
+                params = (interaction.guild.id, pd['name'], panel_message.id, panel_channel.id, support_role_ids_str, pd['category'].id, pd['transcript_channel'].id, 1 if pd['claimable'] else 0, pd['panel_description'], pd['button_text'], pd['welcome_message'])
                 if self.view.panel_id:
-                    cursor.execute("UPDATE panels SET guild_id=?, panel_name=?, message_id=?, channel_id=?, support_role_id=?, category_id=?, transcript_channel_id=?, is_claimable=?, panel_description=?, button_text=?, welcome_message=? WHERE panel_id=?", (*params, self.view.panel_id))
+                    cursor.execute("UPDATE panels SET guild_id=?, panel_name=?, message_id=?, channel_id=?, support_role_ids=?, category_id=?, transcript_channel_id=?, is_claimable=?, panel_description=?, button_text=?, welcome_message=? WHERE panel_id=?", (*params, self.view.panel_id))
                     msg = f"Panel '{pd['name']}' updated successfully in {panel_channel.mention}!"
                 else:
-                    cursor.execute("INSERT INTO panels (guild_id, panel_name, message_id, channel_id, support_role_id, category_id, transcript_channel_id, is_claimable, panel_description, button_text, welcome_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params)
+                    cursor.execute("INSERT INTO panels (guild_id, panel_name, message_id, channel_id, support_role_ids, category_id, transcript_channel_id, is_claimable, panel_description, button_text, welcome_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params)
                     msg = f"Panel '{pd['name']}' created successfully in {panel_channel.mention}!"
                 conn.commit()
+            
             await interaction.followup.send(msg, ephemeral=True)
-            # Delete the configuration message now that we're done.
             await self.view.message.delete()
             self.view.stop()
 
@@ -267,7 +273,6 @@ class Panel(commands.Cog):
             cursor.execute("SELECT panel_id, panel_name FROM panels WHERE guild_id = ?", (interaction.guild.id,))
             panels = cursor.fetchall()
         if not panels: return await interaction.response.send_message("No panels found on this server to edit.", ephemeral=True)
-        # Make the panel selection ephemeral, but the config panel it opens will be regular.
         view = PanelSelectView(self.bot, interaction.user, panels)
         await interaction.response.send_message("Please select a panel to edit from the dropdown below.", view=view, ephemeral=True)
 
